@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: taskflow-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./taskflow.db
+      - DEBUG=True
+    volumes:
+      - .:/app
+    # Нет ограничений ресурсов
+    networks:
+      - taskflow-net
+      - default  # Подключён к сети по умолчанию — лишнее
+
+  # Redis для кэширования (не используется, но запущен)
+  redis:
+    image: redis:6.0
+    container_name: taskflow-redis
+    ports:
+      - "6379:6379"  # Открыт наружу — не нужен
+    networks:
+      - taskflow-net
+
+  # PostgreSQL (не используется, но запущен)
+  postgres:
+    image: postgres:12
+    container_name: taskflow-db
+    ports:
+      - "5432:5432"  # Открыт наружу — критично!
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=SuperSecret123!  # Хардкод пароля
+      - POSTGRES_DB=taskflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - taskflow-net
+
+networks:
+  taskflow-net:
+    driver: bridge
+  default:
+    driver: bridge
+
+volumes:
+  pgdata:

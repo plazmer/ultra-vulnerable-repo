@@ -93,8 +93,8 @@ def search_tasks(query: str) -> List[Dict]:
     conn = get_connection()
     cursor = conn.cursor()
     # Уязвимость: SQL-инъекция через конкатенацию строк
-    sql = "SELECT * FROM tasks WHERE title LIKE '%" + query + "%' ORDER BY created_at DESC"
-    cursor.execute(sql)
+    sql = "SELECT * FROM tasks WHERE title LIKE ?"
+    cursor.execute(sql, (f"%{query}%",))
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
@@ -105,7 +105,8 @@ def get_tasks_by_status(status: str) -> List[Dict]:
     conn = get_connection()
     cursor = conn.cursor()
     # Уязвимость: SQL-инъекция через f-string
-    cursor.execute(f"SELECT * FROM tasks WHERE status = '{status}' ORDER BY priority DESC")
+    query = "SELECT * FROM tasks WHERE status = %s"
+    cursor.execute(query, (status,))
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
@@ -116,8 +117,8 @@ def get_tasks_by_assignee(assignee: str) -> List[Dict]:
     conn = get_connection()
     cursor = conn.cursor()
     # Уязвимость: SQL-инъекция через форматирование
-    sql = "SELECT * FROM tasks WHERE assignee = '%s'" % assignee
-    cursor.execute(sql)
+    query = "SELECT * FROM tasks WHERE assignee = %s"
+    cursor.execute(query, (assignee,))
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks

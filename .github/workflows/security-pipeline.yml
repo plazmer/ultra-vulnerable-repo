@@ -1,0 +1,215 @@
+name: 🔒 Security Pipeline
+
+on:
+push:
+  branches: [main, develop]
+pull_request:
+  branches: [main]
+
+env:
+SECURITY_FAIL_THRESHOLD: 'high'  # critical, high, medium
+
+jobs:
+secrets-scan:
+  name: "🔍 Stage 1: Secrets Detection"
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      continue-on-error: false  # БЛОКИРУЕТ при нахождении секретов
+
+    - name: Fail if secrets found
+      if: failure()
+      run: |
+        echo "❌ CRITICAL: Hardcoded secrets detected!"
+        echo "🔧 Fix: Remove secrets and use environment variables"
+        exit 1
+
+sast-scan:
+  name: "🛡️ Stage 2: SAST Analysis"
+  runs-on: ubuntu-latest
+  needs: secrets-scan
+  steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Bandit
+      run: pip install bandit
+
+    - name: Run Bandit Security Scan
+      id: bandit
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f custom
+      continue-on-error: true
+
+    - name: Parse Bandit Results
+      id: parse
+      run: |
+        python scripts/parse_security_results.py bandit-report.json
+        CRITICAL=$(cat security_summary.json | jq '.critical')
+        HIGH=$(cat security_summary.json | jq '.high')
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+        if [ $CRITICAL -gt 0 ] || [ $HIGH -gt 0 ]; then
+          echo "has_blocking_issues=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_blocking_issues=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Block on Critical/High
+      if: steps.parse.outputs.has_blocking_issues == 'true'
+      run: |
+        echo "❌ BLOCKED: Found ${{ steps.parse.outputs.critical }} Critical and ${{ steps.parse.outputs.high }} High issues"
+        echo "📊 Detailed report uploaded as artifact"
+        exit 1
+
+    - name: Upload Bandit Report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: bandit-report
+        path: bandit-report.json
+dependency-scan:
+  name: "📦 Stage 3: Dependency Check"
+  runs-on: ubuntu-latest
+  needs: sast-scan
+  steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Safety
+      run: pip install safety
+
+    - name: Check Dependencies
+      id: safety
+      run: |
+        safety check --json > safety-report.json || true
+        safety check --full-report
+        CRITICAL=$(cat safety-report.json | jq '[.[] | select(.severity == "critical")] | length')
+        HIGH=$(cat safety-report.json | jq '[.[] | select(.severity == "high")] | length')
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+        if [ $CRITICAL -gt 0 ] || [ $HIGH -gt 0 ]; then
+          echo "has_blocking_issues=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_blocking_issues=false" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
+
+    - name: Block on Vulnerable Dependencies
+      if: steps.safety.outputs.has_blocking_issues == 'true'
+      run: |
+        echo "❌ BLOCKED: Vulnerable dependencies found!"
+        echo "🔧 Fix: Run 'pip install --upgrade package'"
+        exit 1
+
+    - name: Upload Safety Report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: safety-report
+        path: safety-report.json
+
+semgrep-scan:
+  name: "🔬 Stage 4: Semgrep Patterns"
+  runs-on: ubuntu-latest
+  needs: dependency-scan
+  steps:
+    - uses: actions/checkout@v3
+
+    - name: Run Semgrep
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/secrets
+          semgrep.yml
+        auditOn: push
+        generateSarif: "1"
+
+    - name: Upload Semgrep SARIF
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: results.sarif
+
+    - name: Check for Critical Issues
+      run: |
+        if [ -f results.sarif ]; then
+          CRITICAL=$(cat results.sarif | jq '[.results[] | select(.level == "error")] | length')
+          if [ $CRITICAL -gt 0 ]; then
+            echo "❌ BLOCKED: $CRITICAL critical Semgrep issues found"
+            exit 1
+          fi
+        fi
+
+docker-scan:
+  name: "🐳 Stage 5: Docker Security"
+  runs-on: ubuntu-latest
+  needs: semgrep-scan
+  if: github.event_name == 'pull_request'
+  steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Docker Image
+      run: docker build -t app:${{ github.sha }} .
+
+    - name: Run Trivy Scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'image'
+        image-ref: 'app:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'  # БЛОКИРУЕТ при Critical/High
+        ignore-unfixed: true
+
+    - name: Upload Trivy Results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+security-gate:
+  name: "✅ Stage 6: Security Gate"
+  runs-on: ubuntu-latest
+  needs: [secrets-scan, sast-scan, dependency-scan, semgrep-scan]
+  if: always()
+  steps:
+    - name: Check All Jobs Status
+      run: |
+        echo "🔍 Final Security Gate Check"
+          if [ "${{ needs.secrets-scan.result }}" == "failure" ]; then
+            echo "❌ Secrets scan failed"
+            exit 1
+          fi
+          if [ "${{ needs.sast-scan.result }}" == "failure" ]; then
+            echo "❌ SAST scan failed"
+            exit 1
+          fi
+          if [ "${{ needs.dependency-scan.result }}" == "failure" ]; then
+            echo "❌ Dependency scan failed"
+            exit 1
+          fi
+          if [ "${{ needs.semgrep-scan.result }}" == "failure" ]; then
+            echo "❌ Semgrep scan failed"
+            exit 1
+          fi
+          echo "✅ All security checks passed!"
+          echo "🎉 Code is ready for merge"

@@ -1,0 +1,68 @@
+repos:
+  # Проверка на секреты
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+        name: " Gitleaks - поиск секретов"
+        description: "Detect hardcoded secrets"
+        entry: gitleaks protect --staged --verbose --redact
+        language: golang
+
+  # SAST анализ - Bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        name: "🛡️ Bandit - security lint"
+        description: "Find security issues in Python code"
+        entry: bandit
+        args: ["-c", "pyproject.toml", "-r", ".", "-f", "custom", "--exit-zero"]
+        language: python
+        types: [python]
+
+  # Проверка зависимостей
+  - repo: https://github.com/PyCQA/safety
+    rev: 2.3.5
+    hooks:
+      - id: safety
+        name: "📦 Safety - уязвимые зависимости"
+        description: "Check dependencies for vulnerabilities"
+        entry: safety check
+        args: ["--full-report", "--exit-code", "1"]
+        language: python
+
+  # Статический анализ кода
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.40.0
+    hooks:
+      - id: semgrep
+        name: "🔬 Semgrep - security patterns"
+        description: "Find security vulnerabilities"
+        entry: semgrep
+        args:
+          - "--config=auto"
+          - "--config=semgrep.yml"
+          - "--error"
+          - "--quiet"
+        language: python
+
+  # Проверка SQL инъекций
+  - repo: local
+    hooks:
+      - id: sql-injection-check
+        name: "💉 SQL Injection Check"
+        entry: python scripts/check_sql_injection.py
+        language: python
+        types: [python]
+        pass_filenames: false
+
+  # Проверка на хардкод секретов
+  - repo: local
+    hooks:
+      - id: secrets-check
+        name: "🔑 Secrets Pattern Check"
+        entry: python scripts/check_secrets.py
+        language: python
+        types: [python]
+        pass_filenames: false

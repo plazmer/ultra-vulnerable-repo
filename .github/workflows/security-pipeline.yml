@@ -2,7 +2,7 @@ name: 🔒 Security Pipeline
 
 on:
 push:
-  branches: [main, develop]
+  branches: [main, leftTeam]
 pull_request:
   branches: [main]
 

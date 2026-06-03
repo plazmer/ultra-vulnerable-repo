@@ -1,10 +1,13 @@
 name: CI Pipeline
 
+permissions:
+  contents: read
+
 on:
   push:
-    branches: [main, develop]
+    branches: [test]
   pull_request:
-    branches: [main]
+    branches: [test]
 
 jobs:
   lint:
@@ -40,9 +43,26 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
+  security_scan:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Scan dependencies for vulnerabilities
+        run: pip-audit --strict -r requirements.txt
+
   build_docker:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, security_scan]
     steps:
       - uses: actions/checkout@v4
 
